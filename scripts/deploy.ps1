@@ -60,7 +60,7 @@
 
 .NOTES
     Author: Azure SRE Agent Demo Lab
-    Prerequisites: Azure CLI, Bicep CLI
+    Prerequisites: Azure CLI, Bicep CLI, kubectl, Helm
 #>
 
 [CmdletBinding()]
@@ -445,6 +445,209 @@ function Get-SreAgentProviderStatus {
     }
 }
 
+function Test-ChaosStudioDeployment {
+    [CmdletBinding()]
+    param(
+        [Parameter()]
+        $Outputs
+    )
+
+    if ($null -eq $Outputs -or -not ($Outputs.PSObject.Properties.Name -contains 'chaosExperimentNames')) {
+        return $false
+    }
+
+    $experimentNames = $Outputs.chaosExperimentNames.value
+    if ($null -eq $experimentNames) {
+        return $false
+    }
+
+    if ($experimentNames -is [System.Collections.IDictionary]) {
+        return $experimentNames.Count -gt 0
+    }
+
+    return @($experimentNames.PSObject.Properties | Where-Object { $_.MemberType -eq 'NoteProperty' }).Count -gt 0
+}
+
+function Install-ChaosMesh {
+    [CmdletBinding()]
+    param()
+
+    Write-Host "`n🧪 Installing Chaos Mesh for Chaos Studio experiments..." -ForegroundColor Yellow
+
+    if (-not (Get-Command helm -ErrorAction SilentlyContinue)) {
+        throw "Helm is required to install Chaos Mesh. Install Helm and re-run this script."
+    }
+
+    $repoOutput = helm repo add chaos-mesh https://charts.chaos-mesh.org --force-update 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to add/update the Chaos Mesh Helm repository. $($repoOutput.Trim())"
+    }
+
+    $repoUpdateOutput = helm repo update 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to update Helm repositories. $($repoUpdateOutput.Trim())"
+    }
+
+    $namespaceYaml = kubectl create namespace chaos-testing --dry-run=client -o yaml 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to render the chaos-testing namespace manifest. $($namespaceYaml.Trim())"
+    }
+
+    $namespaceOutput = $namespaceYaml | kubectl apply -f - 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to create/update the chaos-testing namespace. $($namespaceOutput.Trim())"
+    }
+
+    $installOutput = helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh `
+        --namespace chaos-testing `
+        --set chaosDaemon.runtime=containerd `
+        --set chaosDaemon.socketPath=/run/containerd/containerd.sock `
+        --wait `
+        --timeout 5m 2>&1 | Out-String
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to install/upgrade Chaos Mesh. $($installOutput.Trim())"
+    }
+
+    $podsOutput = kubectl get pods -n chaos-testing 2>&1 | Out-String
+    if ($LASTEXITCODE -ne 0) {
+        throw "Chaos Mesh was installed, but pod validation failed. $($podsOutput.Trim())"
+    }
+
+    Write-Host "  ✅ Chaos Mesh installed in namespace: chaos-testing" -ForegroundColor Green
+}
+
+function Get-BicepBoolParameter {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [Parameter(Mandatory)]
+        [bool]$DefaultValue
+    )
+
+    if (-not (Test-Path $Path)) {
+        return $DefaultValue
+    }
+
+    $content = Get-Content -Path $Path -Raw
+    $pattern = "(?m)^\s*param\s+$([regex]::Escape($Name))\s*=\s*(true|false)\s*(?://.*)?$"
+    $match = [regex]::Match($content, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if (-not $match.Success) {
+        return $DefaultValue
+    }
+
+    return $match.Groups[1].Value -ieq 'true'
+}
+
+function Wait-LogAnalyticsWorkspace {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$WorkspaceId,
+
+        [Parameter()]
+        [int]$MaxAttempts = 12,
+
+        [Parameter()]
+        [int]$DelaySeconds = 10
+    )
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        $state = az resource show --ids $WorkspaceId --query "properties.provisioningState" -o tsv 2>$null
+        if ($LASTEXITCODE -eq 0 -and $state -eq 'Succeeded') {
+            Write-Host "  ✅ Log Analytics workspace is ready" -ForegroundColor Green
+            return
+        }
+
+        if ($attempt -lt $MaxAttempts) {
+            Write-Host "  ⏳ Waiting for Log Analytics workspace to become readable ($attempt/$MaxAttempts)..." -ForegroundColor Gray
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+
+    throw "Log Analytics workspace was not readable after $MaxAttempts attempts: $WorkspaceId"
+}
+
+function Deploy-Alerts {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [string]$ResourceGroupName,
+
+        [Parameter(Mandatory)]
+        [string]$Location,
+
+        [Parameter(Mandatory)]
+        [string]$WorkloadName,
+
+        [Parameter(Mandatory)]
+        [string]$LogAnalyticsWorkspaceId,
+
+        [Parameter(Mandatory)]
+        [array]$ActionGroupIds,
+
+        [Parameter(Mandatory)]
+        $Tags,
+
+        [Parameter(Mandatory)]
+        [string]$TemplateFile
+    )
+
+    Write-Host "`n🚨 Deploying alert rules..." -ForegroundColor Yellow
+    Wait-LogAnalyticsWorkspace -WorkspaceId $LogAnalyticsWorkspaceId
+
+    $parametersFile = New-TemporaryFile
+    try {
+        $parameters = @{
+            '$schema'       = 'https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#'
+            contentVersion = '1.0.0.0'
+            parameters     = @{
+                namePrefix              = @{ value = "alert-$WorkloadName" }
+                location                = @{ value = $Location }
+                tags                    = @{ value = $Tags }
+                logAnalyticsWorkspaceId = @{ value = $LogAnalyticsWorkspaceId }
+                appNamespace            = @{ value = 'pets' }
+                actionGroupIds          = @{ value = $ActionGroupIds }
+            }
+        }
+        $parameters | ConvertTo-Json -Depth 20 | Set-Content -Path $parametersFile -Encoding utf8
+
+        $deployCommand = @(
+            'az deployment group create',
+            "--resource-group `"$ResourceGroupName`"",
+            '--name deploy-alerts',
+            "--template-file `"$TemplateFile`"",
+            "--parameters `"@$parametersFile`"",
+            '--only-show-errors',
+            '--output json'
+        ) -join ' '
+
+        for ($attempt = 1; $attempt -le 6; $attempt++) {
+            $result = Invoke-AzCliJson -Command $deployCommand
+            if ($result.ExitCode -eq 0 -and $result.Json) {
+                Write-Host "  ✅ Alert rules deployed" -ForegroundColor Green
+                return $result.Json.properties.outputs
+            }
+
+            $message = if ($result.Raw) { $result.Raw.Trim() } else { 'No Azure CLI output returned.' }
+            if ($attempt -eq 6 -or $message -notmatch 'workspace could not be found') {
+                throw "Alert deployment failed. $message"
+            }
+
+            Write-Host "  ⏳ Alert deployment could not find the workspace yet; retrying ($attempt/6)..." -ForegroundColor Gray
+            Start-Sleep -Seconds 20
+        }
+    }
+    finally {
+        Remove-Item -Path $parametersFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # Banner
 Write-Host @"
 
@@ -573,6 +776,9 @@ $nodeResourceGroupName = if ($NodeResourceGroupName) { $NodeResourceGroupName } 
 $deploymentName = "sre-demo-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 $bicepFile = Join-Path $PSScriptRoot "..\infra\bicep\main.bicep"
 $parametersFile = Join-Path $PSScriptRoot "..\infra\bicep\main.bicepparam"
+$alertsFile = Join-Path $PSScriptRoot "..\infra\bicep\modules\alerts.bicep"
+$deployAlerts = Get-BicepBoolParameter -Path $parametersFile -Name 'deployAlerts' -DefaultValue $true
+$deployAlertsInMainValue = 'false'
 
 Write-Host "`n📦 Deployment Configuration:" -ForegroundColor Cyan
 Write-Host "  • Location:        $Location" -ForegroundColor White
@@ -584,6 +790,7 @@ Write-Host "  • Node RG:         $(if ($nodeResourceGroupName) { $nodeResource
 Write-Host "  • SRE Agent Loc:   $SreAgentLocation" -ForegroundColor White
 Write-Host "  • Deployment Name: $deploymentName" -ForegroundColor White
 Write-Host "  • SRE Agent:       $(if ($deploySreAgent) { 'Enabled' } else { 'Disabled' })" -ForegroundColor White
+Write-Host "  • Alert Rules:     $(if ($deployAlerts) { 'Enabled (post-deployment)' } else { 'Disabled' })" -ForegroundColor White
 if ($sreAgentSkipReason) {
     Write-Host "  • SRE Agent Note:  $sreAgentSkipReason" -ForegroundColor Gray
 }
@@ -596,7 +803,7 @@ if ($WhatIf) {
     $whatIfOutput = az deployment sub what-if `
         --location $Location `
         --template-file $bicepFile `
-        --parameters location=$Location workloadName=$WorkloadName deploySreAgent=$deploySreAgentValue sreAgentLocation=$SreAgentLocation infraResourceGroupName=$infraResourceGroupName monitorResourceGroupName=$monitorResourceGroupName sreResourceGroupName=$sreResourceGroupName nodeResourceGroupName=$nodeResourceGroupName `
+        --parameters location=$Location workloadName=$WorkloadName deploySreAgent=$deploySreAgentValue deployAlerts=$deployAlertsInMainValue sreAgentLocation=$SreAgentLocation infraResourceGroupName=$infraResourceGroupName monitorResourceGroupName=$monitorResourceGroupName sreResourceGroupName=$sreResourceGroupName nodeResourceGroupName=$nodeResourceGroupName `
         --name $deploymentName 2>&1 | Out-String
 
     if ($LASTEXITCODE -ne 0) {
@@ -624,7 +831,7 @@ try {
         "az deployment sub create",
         "--location $Location",
         "--template-file `"$bicepFile`"",
-        "--parameters `"$parametersFile`" location=$Location workloadName=$WorkloadName deploySreAgent=$deploySreAgentValue sreAgentLocation=$SreAgentLocation infraResourceGroupName=$infraResourceGroupName monitorResourceGroupName=$monitorResourceGroupName sreResourceGroupName=$sreResourceGroupName nodeResourceGroupName=$nodeResourceGroupName",
+        "--parameters `"$parametersFile`" location=$Location workloadName=$WorkloadName deploySreAgent=$deploySreAgentValue deployAlerts=$deployAlertsInMainValue sreAgentLocation=$SreAgentLocation infraResourceGroupName=$infraResourceGroupName monitorResourceGroupName=$monitorResourceGroupName sreResourceGroupName=$sreResourceGroupName nodeResourceGroupName=$nodeResourceGroupName",
         "--name $deploymentName",
         "--only-show-errors",
         "--output json"
@@ -702,16 +909,57 @@ try {
         Write-Host "  • Prometheus DCR:   $($outputs.prometheusDataCollectionRuleId.value)" -ForegroundColor White
     }
 
+    if ($outputs.defaultActionGroupId.value) {
+        Write-Host "  • Action Group:     $($outputs.defaultActionGroupId.value)" -ForegroundColor White
+        Write-Host "  • Incident Webhook: $($outputs.defaultActionGroupHasWebhook.value)" -ForegroundColor White
+    }
+
+    if ($deployAlerts) {
+        if (-not (Test-Path $alertsFile)) {
+            throw "Alerts template not found at: $alertsFile"
+        }
+
+        $alertActionGroupIds = @()
+        if ($outputs.defaultActionGroupId.value) {
+            $alertActionGroupIds += $outputs.defaultActionGroupId.value
+        }
+
+        $deploymentTags = $deployment.properties.parameters.tags.value
+        if ($null -eq $deploymentTags) {
+            $deploymentTags = @{}
+        }
+
+        $alertOutputs = Deploy-Alerts `
+            -ResourceGroupName $monitorResourceGroupName `
+            -Location $Location `
+            -WorkloadName $WorkloadName `
+            -LogAnalyticsWorkspaceId $outputs.logAnalyticsWorkspaceId.value `
+            -ActionGroupIds $alertActionGroupIds `
+            -Tags $deploymentTags `
+            -TemplateFile $alertsFile
+
+        foreach ($alertOutputName in @(
+                'podRestartAlertId',
+                'http5xxAlertId',
+                'podFailureAlertId',
+                'crashLoopOomAlertId',
+                'highCpuAlertId',
+                'probeFailureAlertId',
+                'networkErrorAlertId'
+            )) {
+            $mainOutput = $outputs.PSObject.Properties[$alertOutputName]
+            $alertOutput = $alertOutputs.PSObject.Properties[$alertOutputName]
+            if ($mainOutput -and $alertOutput) {
+                $mainOutput.Value.value = $alertOutput.Value.value
+            }
+        }
+    }
+
     if ($outputs.podRestartAlertId.value) {
         Write-Host "  • Alert (restarts): $($outputs.podRestartAlertId.value)" -ForegroundColor White
         Write-Host "  • Alert (HTTP 5xx): $($outputs.http5xxAlertId.value)" -ForegroundColor White
         Write-Host "  • Alert (failures): $($outputs.podFailureAlertId.value)" -ForegroundColor White
         Write-Host "  • Alert (crash/oom):$($outputs.crashLoopOomAlertId.value)" -ForegroundColor White
-    }
-
-    if ($outputs.defaultActionGroupId.value) {
-        Write-Host "  • Action Group:     $($outputs.defaultActionGroupId.value)" -ForegroundColor White
-        Write-Host "  • Incident Webhook: $($outputs.defaultActionGroupHasWebhook.value)" -ForegroundColor White
     }
 
     if ($outputs.sreAgentId.value) {
@@ -740,9 +988,17 @@ Write-Host "`n🔑 Getting AKS credentials..." -ForegroundColor Yellow
 az aks get-credentials `
     --resource-group $infraResourceGroupName `
     --name $outputs.aksClusterName.value `
+    --admin `
     --overwrite-existing
 
 Write-Host "  ✅ kubectl configured for cluster: $($outputs.aksClusterName.value)" -ForegroundColor Green
+
+if (Test-ChaosStudioDeployment -Outputs $outputs) {
+    Install-ChaosMesh
+}
+else {
+    Write-Host "`n🧪 Chaos Studio experiments are disabled; skipping Chaos Mesh installation." -ForegroundColor Gray
+}
 
 $sreAgentManagedIdentityPrincipalId = ''
 if ($outputs.PSObject.Properties.Name -contains 'sreAgentManagedIdentityPrincipalId') {
@@ -843,7 +1099,7 @@ if ($DeployPortal) {
     Write-Host "`n🌐 Deploying Chaos Engineering Portal..." -ForegroundColor Yellow
     $portalScript = Join-Path $PSScriptRoot "build-portal.ps1"
     if (Test-Path $portalScript) {
-        & pwsh -NoLogo -NoProfile -File $portalScript -ResourceGroupName $infraResourceGroupName -WorkloadName $WorkloadName -SubscriptionId $SubscriptionId
+        & pwsh -NoLogo -NoProfile -File $portalScript -ResourceGroupName $infraResourceGroupName -WorkloadName $WorkloadName -SubscriptionId $account.id
     }
     else {
         Write-Host "  ⚠️  Portal build script not found at: $portalScript" -ForegroundColor Yellow
@@ -894,4 +1150,3 @@ Write-Host @"
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 "@ -ForegroundColor Cyan
-

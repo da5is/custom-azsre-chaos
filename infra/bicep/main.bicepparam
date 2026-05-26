@@ -42,16 +42,10 @@ param actionGroupEmailReceivers = [
   }
 ]
 
-param actionGroupSmsReceivers = [
-  {
-    name: 'YourName-SMS'
-    countryCode: '1'
-    phoneNumber: '0000000000'
-  }
-]
+param actionGroupSmsReceivers = []
 
 // AKS Configuration - cost-optimized for demo
-param kubernetesVersion = '1.32'
+param kubernetesVersion = '1.34'
 param systemNodeVmSize = 'Standard_D2s_v6'
 param userNodeVmSize = 'Standard_D2s_v6'
 param systemNodeCount = 2

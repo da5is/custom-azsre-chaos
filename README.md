@@ -48,6 +48,7 @@ A fully automated Azure environment for demonstrating **Azure SRE Agent** capabi
 - [Azure CLI](https://docs.microsoft.com/cli/azure/install-azure-cli) v2.80+
 - PowerShell 7+ or Windows PowerShell
 - [kubectl](https://kubernetes.io/docs/tasks/tools/) installed
+- [Helm](https://helm.sh/docs/intro/install/) installed for Chaos Mesh
 
 ### Deploy
 
@@ -84,7 +85,7 @@ Resource groups follow an enterprise naming convention by default: `{ENV}-{PROJE
 
 ### Automated (Chaos Studio)
 
-These scenarios use pre-provisioned Azure Chaos Studio experiments:
+These scenarios use Azure Chaos Studio experiments pre-provisioned by Bicep. `scripts\deploy.ps1` also installs the required in-cluster Chaos Mesh components into the `chaos-testing` namespace with Helm.
 
 ```powershell
 # Run a single scenario
@@ -224,7 +225,7 @@ cd scripts
 
 | Script | Description |
 |--------|-------------|
-| `deploy.ps1` | Deploy all infrastructure (Bicep) + optional RBAC |
+| `deploy.ps1` | Deploy all infrastructure, post-deploy alert rules, Chaos Mesh, and optional RBAC |
 | `build-portal.ps1` | Build container images and deploy chaos portal to AKS |
 | `configure-rbac.ps1` | Assign RBAC roles for SRE Agent and current user |
 | `run-chaos-scenarios.ps1` | Start/stop/check Chaos Studio experiments and kubectl scenarios |
@@ -256,3 +257,4 @@ MIT License — see [LICENSE](LICENSE) for details.
 - SRE Agent is available in **East US 2**, **Sweden Central**, and **Australia East**
 - AKS cluster must **not** be a private cluster for SRE Agent access
 - Chaos Studio experiments require the AKS cluster to have the Chaos target extension enabled (handled by the Bicep deployment)
+- Alert rules are deployed by `scripts\deploy.ps1` after the Log Analytics workspace is readable to avoid transient workspace propagation failures

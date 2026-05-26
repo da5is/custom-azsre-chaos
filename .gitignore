@@ -17,6 +17,9 @@ azureconfig.json
 # Deployment outputs (may contain sensitive info)
 **/deployment-outputs.json
 
+# Local/security deployment helper scripts
+scripts/sec-*.ps1
+
 # =============================================================================
 # Bicep / ARM
 # =============================================================================

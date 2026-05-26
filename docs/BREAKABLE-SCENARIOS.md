@@ -26,6 +26,8 @@ Six scenarios are pre-provisioned as **Azure Chaos Studio** experiments. These a
 - Clean up automatically when the experiment ends
 - Can be started/stopped/monitored via the orchestration script or Azure Portal
 
+The Bicep deployment provisions the Azure Chaos Studio targets, capabilities, identities, and experiments. `scripts\deploy.ps1` installs the required Chaos Mesh Helm chart into the AKS cluster's `chaos-testing` namespace after AKS credentials are configured.
+
 ```powershell
 # Start a Chaos Studio experiment
 .\scripts\run-chaos-scenarios.ps1 -Scenario oom-killed -Action start -ResourceGroupName <infraRG>
