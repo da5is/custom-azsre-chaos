@@ -498,15 +498,32 @@ function Install-ChaosMesh {
         throw "Failed to create/update the chaos-testing namespace. $($namespaceOutput.Trim())"
     }
 
+    $existingRelease = helm status chaos-mesh --namespace chaos-testing --output json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+    if ($LASTEXITCODE -eq 0 -and $existingRelease -and $existingRelease.info.status -eq 'deployed') {
+        $daemonSetJson = kubectl get daemonset chaos-daemon -n chaos-testing -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+        if ($LASTEXITCODE -eq 0 -and $daemonSetJson) {
+            $desired = [int]$daemonSetJson.status.desiredNumberScheduled
+            $ready = [int]$daemonSetJson.status.numberReady
+            $updated = [int]$daemonSetJson.status.updatedNumberScheduled
+            if ($desired -gt 0 -and $ready -eq $desired -and $updated -eq $desired) {
+                Write-Host "  ✅ Chaos Mesh is already installed and chaos-daemon is ready ($ready/$desired); skipping Helm upgrade." -ForegroundColor Green
+                return
+            }
+            Write-Host "  ⚠️  Existing Chaos Mesh release found, but chaos-daemon is not fully ready ($ready/$desired ready, $updated/$desired updated). Attempting repair upgrade..." -ForegroundColor Yellow
+        }
+    }
+
     $installOutput = helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh `
         --namespace chaos-testing `
         --set chaosDaemon.runtime=containerd `
         --set chaosDaemon.socketPath=/run/containerd/containerd.sock `
         --wait `
-        --timeout 5m 2>&1 | Out-String
+        --timeout 10m 2>&1 | Out-String
 
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to install/upgrade Chaos Mesh. $($installOutput.Trim())"
+        $daemonSetStatus = kubectl get daemonset chaos-daemon -n chaos-testing -o wide 2>&1 | Out-String
+        $podStatus = kubectl get pods -n chaos-testing -o wide 2>&1 | Out-String
+        throw "Failed to install/upgrade Chaos Mesh. $($installOutput.Trim())`n`nchaos-daemon status:`n$($daemonSetStatus.Trim())`n`nChaos Mesh pods:`n$($podStatus.Trim())"
     }
 
     $podsOutput = kubectl get pods -n chaos-testing 2>&1 | Out-String
