@@ -24,7 +24,7 @@ The entire lab deploys via **Bicep** (Azure's Infrastructure as Code language) a
 
 *6 Automated via Azure Chaos Studio (triggered via a PowerShell orchestration script `run-chaos-scenarios.ps1`):*
 - **OOMKilled** — Memory stress on order-service pods until the Linux OOM Killer terminates the container
-- **CrashLoopBackOff** — Repeated pod kills on product-service causing exponential back-off
+- **CrashLoopBackOff** — Pod failure on product-service causing liveness restarts and exponential back-off
 - **High CPU** — CPU stress injection causing throttling and degraded response times
 - **Probe Failure** — HTTP 500 injection on health endpoints causing liveness probe failures and unnecessary restarts
 - **MongoDB Down** — Database pod termination creating a cascading failure (makeline-service loses its data store, orders queue in RabbitMQ, requires multi-hop root cause analysis)

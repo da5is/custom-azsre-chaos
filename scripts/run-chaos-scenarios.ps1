@@ -76,10 +76,10 @@ $chaosScenarios = @{
     }
     'crash-loop'    = @{
         ExperimentName = "chaos-${WorkloadName}-crash-loop"
-        Description    = 'Pod kill on product-service (CrashLoopBackOff)'
+        Description    = 'Pod failure on product-service (liveness probe-induced CrashLoopBackOff)'
         SrePrompts     = @(
             'Why is product-service in CrashLoopBackOff?'
-            'Show me the logs for the crashing pods'
+            'Show me the liveness probe failures for product-service'
         )
     }
     'high-cpu'      = @{

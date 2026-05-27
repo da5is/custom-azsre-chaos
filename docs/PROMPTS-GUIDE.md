@@ -39,7 +39,7 @@ Start here when the cluster is healthy to show SRE Agent's baseline capabilities
 | **Open-ended** | "My product catalog isn't loading. What's wrong?" |
 | **Direct** | "Why is product-service in CrashLoopBackOff?" |
 | **Specific** | "Show me the logs for the crashing product-service pods" |
-| **Remediation** | "What's causing exit code 1 in product-service?" |
+| **Remediation** | "What's causing the repeated liveness probe failures in product-service?" |
 | **Action** | "Restart the product-service deployment" |
 
 ### ImagePullBackOff

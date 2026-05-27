@@ -7,7 +7,7 @@ This guide explains each failure scenario available in the demo lab, how to trig
 | # | Scenario | Method | What Breaks | SRE Agent Diagnosis |
 |---|----------|--------|-------------|---------------------|
 | 1 | OOMKilled | Chaos Studio | Memory exhaustion | Identifies OOM events, recommends memory limits |
-| 2 | CrashLoop | Chaos Studio | Pod kill / startup failure | Shows exit codes, logs analysis |
+| 2 | CrashLoop | Chaos Studio | Pod failure / liveness failure | Shows probe failures, restart analysis |
 | 3 | ImagePullBackOff | kubectl | Bad image reference | Registry/image troubleshooting |
 | 4 | High CPU | Chaos Studio | Resource exhaustion | Performance analysis |
 | 5 | Pending Pods | kubectl | Insufficient resources | Scheduling analysis |
@@ -105,8 +105,9 @@ kubectl apply -f k8s/base/application.yaml
 **Method:** Chaos Studio | **Experiment:** `chaos-<workloadName>-crash-loop`
 
 **What happens:**
-- Chaos Studio kills the product-service pod process repeatedly
-- Container exits, Kubernetes restarts it, enters CrashLoopBackOff
+- Chaos Studio injects a Chaos Mesh `pod-failure` fault into one product-service pod
+- The product-service liveness probe fails while the fault is active
+- Kubernetes repeatedly restarts the container until it enters CrashLoopBackOff
 - Back-off delay increases with each restart
 
 **How to trigger:**
@@ -126,7 +127,7 @@ kubectl logs -l app=product-service -n pets --previous
 **SRE Agent prompts:**
 - "Why is product-service in CrashLoopBackOff?"
 - "Show me the logs for the crashing pods"
-- "What's causing exit code 1 in my application?"
+- "What's causing the repeated liveness probe failures in product-service?"
 
 **How to fix:**
 ```bash

@@ -76,7 +76,7 @@ Six scenarios are automated via Azure Chaos Studio and triggered with `run-chaos
 | Experiment | Target | Fault Type |
 |---|---|---|
 | `chaos-*-oom-killed` | order-service | Memory stress → OOMKilled |
-| `chaos-*-crash-loop` | product-service | Pod kill → CrashLoopBackOff |
+| `chaos-*-crash-loop` | product-service | Pod failure → liveness restarts → CrashLoopBackOff |
 | `chaos-*-high-cpu` | order-service | CPU stress → throttling |
 | `chaos-*-probe-failure` | HTTP endpoints | HTTP 500 → liveness probe failure |
 | `chaos-*-mongodb-down` | mongodb | Database offline → cascading failure |

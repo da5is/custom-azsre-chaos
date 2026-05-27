@@ -113,7 +113,7 @@ kubectl apply -f k8s/base/application.yaml
 | # | Scenario | Method | Description | SRE Agent Diagnoses |
 |---|----------|--------|-------------|---------------------|
 | 1 | OOMKilled | Chaos Studio | Memory stress on pods | Memory exhaustion, limit recommendations |
-| 2 | CrashLoop | Chaos Studio | Pod kill causing restarts | Exit codes, log analysis |
+| 2 | CrashLoop | Chaos Studio | Pod failure causing liveness restarts | Probe failures, restart analysis |
 | 3 | ImagePullBackOff | kubectl | Invalid image reference | Registry/image troubleshooting |
 | 4 | HighCPU | Chaos Studio | CPU stress on pods | Performance analysis |
 | 5 | PendingPods | kubectl | Insufficient resources | Scheduling analysis |

@@ -39,7 +39,7 @@ var alertActions = {
   }
 }
 
-// ---- Chaos experiment #2: CrashLoop (product-service pod kill) ----
+// ---- Chaos experiment #2: CrashLoop (product-service pod failure) ----
 resource podRestartAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = {
   name: '${namePrefix}-pod-restarts'
   location: location

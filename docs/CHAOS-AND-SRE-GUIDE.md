@@ -94,11 +94,11 @@ kubectl apply -f k8s/base/application.yaml
 | **Method** | Chaos Studio |
 | **Experiment** | `chaos-<workloadName>-crash-loop` |
 | **Target Service** | product-service |
-| **Failure Type** | Pod kill → CrashLoopBackOff → increasing back-off delay |
+| **Failure Type** | Pod failure → liveness probe restarts → CrashLoopBackOff |
 | **Difficulty** | Beginner |
 
 ### What Chaos Studio Does
-The experiment kills the product-service pod process at regular intervals. Kubernetes detects the container exit and restarts it, but the repeated kills cause CrashLoopBackOff with exponentially increasing back-off delays.
+The experiment injects a Chaos Mesh `pod-failure` fault into one product-service pod. Because product-service has an HTTP liveness probe, Kubernetes repeatedly restarts the unavailable container while the fault is active, producing CrashLoopBackOff with increasing back-off delays.
 
 ### Trigger
 ```powershell
@@ -116,7 +116,7 @@ kubectl logs -l app=product-service -n pets --previous  # Logs from the terminat
 | Step | Prompt | What SRE Agent Does |
 |------|--------|---------------------|
 | **Discovery** | *"My product catalog isn't loading. What's wrong?"* | Finds product-service in CrashLoopBackOff |
-| **Diagnosis** | *"Why is product-service in CrashLoopBackOff?"* | Shows exit code, restart timeline, back-off state |
+| **Diagnosis** | *"Why is product-service in CrashLoopBackOff?"* | Shows liveness probe failures, restart timeline, back-off state |
 | **Log Analysis** | *"Show me the logs for the crashing product-service pods"* | Retrieves current and previous container logs |
 | **Remediation** | *"Restart the product-service deployment"* | Performs rolling restart |
 | **Verification** | *"Is product-service healthy now?"* | Confirms pods are Running with 0 restarts |

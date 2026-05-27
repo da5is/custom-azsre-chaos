@@ -464,7 +464,7 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               }
             }
           }
-          // Log Analytics – Non-Running Pods KQL
+          // Log Analytics – Recent container stdout/stderr from the pets namespace.
           {
             position: { x: 0, y: 14, colSpan: 6, rowSpan: 4 }
             metadata: {
@@ -480,18 +480,18 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               ]
               settings: {
                 content: {
-                  Query: 'KubePodInventory\n| where Namespace == "pets"\n| where PodStatus != "Running" and PodStatus != "Succeeded"\n| summarize Count=count() by PodStatus, Name, bin(TimeGenerated, 5m)\n| order by TimeGenerated desc\n| take 50'
+                  Query: 'let recentPods = KubePodInventory\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| summarize arg_max(TimeGenerated, *) by ContainerID\n| project ContainerID, InventoryPodName=Name, InventoryContainerName=ContainerName;\nunion isfuzzy=true\n(\n    ContainerLogV2\n    | where TimeGenerated > ago(24h)\n    | where PodNamespace == "pets"\n    | project TimeGenerated, Pod=PodName, Container=ContainerName, Level=tostring(LogLevel), Message=tostring(LogMessage)\n),\n(\n    ContainerLog\n    | where TimeGenerated > ago(24h)\n    | join kind=innerunique recentPods on ContainerID\n    | project TimeGenerated, Pod=InventoryPodName, Container=InventoryContainerName, Level="", Message=tostring(LogEntry)\n)\n| where isnotempty(Message)\n| order by TimeGenerated desc\n| take 200'
                   ControlType: 'AnalyticsGrid'
                   SpecificChart: ''
-                  PartTitle: 'Non-Running Pods (pets namespace)'
+                  PartTitle: 'Recent Container Logs (pets namespace)'
                   Dimensions: {}
-                  DashboardPartTitle: 'Non-Running Pods'
+                  DashboardPartTitle: 'Recent Container Logs'
                   Version: '2.0'
                 }
               }
             }
           }
-          // Log Analytics – Failure Events KQL
+          // Log Analytics – Recent Kubernetes events from the pets namespace.
           {
             position: { x: 6, y: 14, colSpan: 6, rowSpan: 4 }
             metadata: {
@@ -507,12 +507,12 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               ]
               settings: {
                 content: {
-                  Query: 'KubeEvents\n| where Namespace == "pets"\n| where Reason in ("BackOff", "Unhealthy", "Failed", "FailedScheduling", "OOMKilling")\n| summarize Count=count() by Reason, Name, bin(TimeGenerated, 5m)\n| order by TimeGenerated desc\n| take 50'
+                  Query: 'KubeEvents\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| project TimeGenerated, Type, Reason, Object=Name, Message\n| order by TimeGenerated desc\n| take 100'
                   ControlType: 'AnalyticsGrid'
                   SpecificChart: ''
-                  PartTitle: 'Failure Events (pets namespace)'
+                  PartTitle: 'Recent Kubernetes Events (pets namespace)'
                   Dimensions: {}
-                  DashboardPartTitle: 'Failure Events'
+                  DashboardPartTitle: 'Recent Kubernetes Events'
                   Version: '2.0'
                 }
               }
@@ -527,7 +527,7 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               settings: {
                 content: {
                   settings: {
-                    content: '### 🔄 Container Restart Trends'
+                    content: '### 🔄 Pod Inventory & Restart Trends'
                     title: ''
                     subtitle: ''
                     markdownSource: 1
@@ -537,7 +537,7 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               }
             }
           }
-          // Container Restarts by Pod (chart)
+          // Latest pod inventory from Container Insights.
           {
             position: { x: 0, y: 19, colSpan: 6, rowSpan: 4 }
             metadata: {
@@ -553,18 +553,18 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               ]
               settings: {
                 content: {
-                  Query: 'KubePodInventory\n| where Namespace == "pets"\n| where ContainerRestartCount > 0\n| summarize TotalRestarts=sum(ContainerRestartCount) by Name, bin(TimeGenerated, 5m)\n| render timechart'
-                  ControlType: 'FrameControlChart'
-                  SpecificChart: 'StackedColumn'
-                  PartTitle: 'Container Restarts by Pod'
-                  Dimensions: { xAxis: { name: 'TimeGenerated', type: 'datetime' }, yAxis: [{ name: 'TotalRestarts', type: 'long' }], splitBy: [{ name: 'Name', type: 'string' }] }
-                  DashboardPartTitle: 'Container Restarts by Pod'
+                  Query: 'KubePodInventory\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| summarize arg_max(TimeGenerated, *) by Name, ContainerName\n| project TimeGenerated, Pod=Name, Container=ContainerName, PodStatus, ContainerStatus, ContainerStatusReason, Restarts=ContainerRestartCount\n| order by Pod asc, Container asc'
+                  ControlType: 'AnalyticsGrid'
+                  SpecificChart: ''
+                  PartTitle: 'Pod Inventory (pets namespace)'
+                  Dimensions: {}
+                  DashboardPartTitle: 'Pod Inventory'
                   Version: '2.0'
                 }
               }
             }
           }
-          // OOM & CrashLoop Events Timeline (chart)
+          // Container restart trend, including zero-restart pods so the tile still has data.
           {
             position: { x: 6, y: 19, colSpan: 6, rowSpan: 4 }
             metadata: {
@@ -580,7 +580,134 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               ]
               settings: {
                 content: {
-                  Query: 'KubeEvents\n| where Namespace == "pets"\n| where Reason in ("OOMKilling", "OOMKilled", "BackOff", "Killing", "Unhealthy")\n| summarize Count=count() by Reason, bin(TimeGenerated, 5m)\n| render timechart'
+                  Query: 'KubePodInventory\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| summarize Restarts=max(ContainerRestartCount) by Pod=Name, bin(TimeGenerated, 5m)\n| order by TimeGenerated asc\n| render timechart'
+                  ControlType: 'FrameControlChart'
+                  SpecificChart: 'StackedColumn'
+                  PartTitle: 'Container Restart Trend'
+                  Dimensions: { xAxis: { name: 'TimeGenerated', type: 'datetime' }, yAxis: [{ name: 'Restarts', type: 'long' }], splitBy: [{ name: 'Pod', type: 'string' }] }
+                  DashboardPartTitle: 'Container Restart Trend'
+                  Version: '2.0'
+                }
+              }
+            }
+          }
+          // ── Row 6: Failure-Only Diagnostics Header ──
+          {
+            position: { x: 0, y: 23, colSpan: 12, rowSpan: 1 }
+            metadata: {
+              type: 'Extension/HubsExtension/PartType/MarkdownPart'
+              inputs: []
+              settings: {
+                content: {
+                  settings: {
+                    content: '### 🚨 Failure-Only Diagnostics'
+                    title: ''
+                    subtitle: ''
+                    markdownSource: 1
+                    markdownUri: ''
+                  }
+                }
+              }
+            }
+          }
+          // Failure-only: pods that are not currently running or completed.
+          {
+            position: { x: 0, y: 24, colSpan: 6, rowSpan: 4 }
+            metadata: {
+              type: 'Extension/Microsoft_OperationsManagementSuite_Workspace/PartType/LogsDashboardPart'
+              inputs: [
+                { name: 'resourceTypeMode', isOptional: true, value: 'workspace' }
+                { name: 'ComponentId', isOptional: true, value: {
+                  ResourceId: logAnalyticsWorkspaceId
+                }}
+                { name: 'Scope', isOptional: true, value: {
+                  resourceIds: [logAnalyticsWorkspaceId]
+                }}
+              ]
+              settings: {
+                content: {
+                  Query: 'KubePodInventory\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| where PodStatus !in ("Running", "Succeeded")\n| summarize Count=count() by PodStatus, Name, bin(TimeGenerated, 5m)\n| order by TimeGenerated desc\n| take 50'
+                  ControlType: 'AnalyticsGrid'
+                  SpecificChart: ''
+                  PartTitle: 'Non-Running Pods (pets namespace)'
+                  Dimensions: {}
+                  DashboardPartTitle: 'Non-Running Pods'
+                  Version: '2.0'
+                }
+              }
+            }
+          }
+          // Failure-only: warning/error Kubernetes events.
+          {
+            position: { x: 6, y: 24, colSpan: 6, rowSpan: 4 }
+            metadata: {
+              type: 'Extension/Microsoft_OperationsManagementSuite_Workspace/PartType/LogsDashboardPart'
+              inputs: [
+                { name: 'resourceTypeMode', isOptional: true, value: 'workspace' }
+                { name: 'ComponentId', isOptional: true, value: {
+                  ResourceId: logAnalyticsWorkspaceId
+                }}
+                { name: 'Scope', isOptional: true, value: {
+                  resourceIds: [logAnalyticsWorkspaceId]
+                }}
+              ]
+              settings: {
+                content: {
+                  Query: 'KubeEvents\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| where Type == "Warning" or Reason in ("BackOff", "Unhealthy", "Failed", "FailedScheduling", "OOMKilling", "OOMKilled", "Killing")\n| project TimeGenerated, Type, Reason, Object=Name, Message\n| order by TimeGenerated desc\n| take 100'
+                  ControlType: 'AnalyticsGrid'
+                  SpecificChart: ''
+                  PartTitle: 'Failure Events (pets namespace)'
+                  Dimensions: {}
+                  DashboardPartTitle: 'Failure Events'
+                  Version: '2.0'
+                }
+              }
+            }
+          }
+          // Failure-only: pods with restarts.
+          {
+            position: { x: 0, y: 28, colSpan: 6, rowSpan: 4 }
+            metadata: {
+              type: 'Extension/Microsoft_OperationsManagementSuite_Workspace/PartType/LogsDashboardPart'
+              inputs: [
+                { name: 'resourceTypeMode', isOptional: true, value: 'workspace' }
+                { name: 'ComponentId', isOptional: true, value: {
+                  ResourceId: logAnalyticsWorkspaceId
+                }}
+                { name: 'Scope', isOptional: true, value: {
+                  resourceIds: [logAnalyticsWorkspaceId]
+                }}
+              ]
+              settings: {
+                content: {
+                  Query: 'KubePodInventory\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| where ContainerRestartCount > 0\n| summarize TotalRestarts=max(ContainerRestartCount) by Name, bin(TimeGenerated, 5m)\n| order by TimeGenerated asc\n| render timechart'
+                  ControlType: 'FrameControlChart'
+                  SpecificChart: 'StackedColumn'
+                  PartTitle: 'Container Restarts by Pod (failures only)'
+                  Dimensions: { xAxis: { name: 'TimeGenerated', type: 'datetime' }, yAxis: [{ name: 'TotalRestarts', type: 'long' }], splitBy: [{ name: 'Name', type: 'string' }] }
+                  DashboardPartTitle: 'Container Restarts by Pod'
+                  Version: '2.0'
+                }
+              }
+            }
+          }
+          // Failure-only: OOM and CrashLoop-related Kubernetes events.
+          {
+            position: { x: 6, y: 28, colSpan: 6, rowSpan: 4 }
+            metadata: {
+              type: 'Extension/Microsoft_OperationsManagementSuite_Workspace/PartType/LogsDashboardPart'
+              inputs: [
+                { name: 'resourceTypeMode', isOptional: true, value: 'workspace' }
+                { name: 'ComponentId', isOptional: true, value: {
+                  ResourceId: logAnalyticsWorkspaceId
+                }}
+                { name: 'Scope', isOptional: true, value: {
+                  resourceIds: [logAnalyticsWorkspaceId]
+                }}
+              ]
+              settings: {
+                content: {
+                  Query: 'KubeEvents\n| where TimeGenerated > ago(24h)\n| where Namespace == "pets"\n| where Reason in ("OOMKilling", "OOMKilled", "BackOff", "Killing", "Unhealthy")\n| summarize Count=count() by Reason, bin(TimeGenerated, 5m)\n| order by TimeGenerated asc\n| render timechart'
                   ControlType: 'FrameControlChart'
                   SpecificChart: 'StackedColumn'
                   PartTitle: 'OOM & CrashLoop Events'
@@ -591,9 +718,9 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               }
             }
           }
-          // ── Row 6: Memory & Resource Pressure Header ──
+          // ── Row 7: Memory & Resource Pressure Header ──
           {
-            position: { x: 0, y: 23, colSpan: 12, rowSpan: 1 }
+            position: { x: 0, y: 33, colSpan: 12, rowSpan: 1 }
             metadata: {
               type: 'Extension/HubsExtension/PartType/MarkdownPart'
               inputs: []
@@ -612,7 +739,7 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
           }
           // Container Memory Usage
           {
-            position: { x: 0, y: 24, colSpan: 4, rowSpan: 3 }
+            position: { x: 0, y: 34, colSpan: 4, rowSpan: 3 }
             metadata: {
               type: 'Extension/HubsExtension/PartType/MonitorChartPart'
               inputs: [
@@ -647,7 +774,7 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
           }
           // Network In Bytes
           {
-            position: { x: 4, y: 24, colSpan: 4, rowSpan: 3 }
+            position: { x: 4, y: 34, colSpan: 4, rowSpan: 3 }
             metadata: {
               type: 'Extension/HubsExtension/PartType/MonitorChartPart'
               inputs: [
@@ -682,7 +809,7 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
           }
           // Network Out Bytes
           {
-            position: { x: 8, y: 24, colSpan: 4, rowSpan: 3 }
+            position: { x: 8, y: 34, colSpan: 4, rowSpan: 3 }
             metadata: {
               type: 'Extension/HubsExtension/PartType/MonitorChartPart'
               inputs: [
@@ -715,9 +842,9 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
               }
             }
           }
-          // ── Row 7: Quick Links Header ──
+          // ── Row 8: Quick Links Header ──
           {
-            position: { x: 0, y: 27, colSpan: 12, rowSpan: 1 }
+            position: { x: 0, y: 37, colSpan: 12, rowSpan: 1 }
             metadata: {
               type: 'Extension/HubsExtension/PartType/MarkdownPart'
               inputs: []
@@ -736,7 +863,7 @@ resource dashboard 'Microsoft.Portal/dashboards@2020-09-01-preview' = {
           }
           // Quick Links Table
           {
-            position: { x: 0, y: 28, colSpan: 12, rowSpan: 3 }
+            position: { x: 0, y: 38, colSpan: 12, rowSpan: 3 }
             metadata: {
               type: 'Extension/HubsExtension/PartType/MarkdownPart'
               inputs: []

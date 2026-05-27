@@ -6,7 +6,7 @@
 //
 // Experiments (all on-demand, pets namespace only):
 //   1. OOMKilled       - Memory stress on order-service   → triggers crashloop-oom alert        [HIGH RISK]
-//   2. CrashLoop       - Pod kill on product-service      → triggers pod-restarts alert
+//   2. CrashLoop       - Pod failure on product-service   → triggers pod-restarts alert
 //   3. High CPU        - CPU stress on store-front         → triggers high-cpu alert
 //   4. Probe Failure   - HTTP 500 on store-admin:8081      → triggers probe-failure alert
 //   5. Network Block   - Network partition on makeline-svc → triggers network-container-errors alert [HIGH RISK]
@@ -27,6 +27,9 @@ param namePrefix string
 
 @description('Duration of each experiment in ISO 8601 format')
 param experimentDuration string = 'PT10M'
+
+@description('Duration of the CrashLoop pod-failure injection in Chaos Mesh duration format')
+param crashLoopPodFailureDuration string = '10m'
 
 @description('Duration of stress experiments (shorter to limit blast radius)')
 param stressDuration string = 'PT5M'
@@ -159,7 +162,7 @@ resource expOomKilled 'Microsoft.Chaos/experiments@2024-01-01' = {
 }
 
 // =============================================================================
-// EXPERIMENT 2: CrashLoop - Pod Kill on product-service
+// EXPERIMENT 2: CrashLoop - Pod failure on product-service
 // =============================================================================
 
 resource expCrashLoop 'Microsoft.Chaos/experiments@2024-01-01' = {
@@ -187,7 +190,7 @@ resource expCrashLoop 'Microsoft.Chaos/experiments@2024-01-01' = {
     ]
     steps: [
       {
-        name: 'step1-pod-kill'
+        name: 'step1-pod-failure'
         branches: [
           {
             name: 'branch1'
@@ -200,7 +203,7 @@ resource expCrashLoop 'Microsoft.Chaos/experiments@2024-01-01' = {
                 parameters: [
                   {
                     key: 'jsonSpec'
-                    value: '{"action":"pod-kill","mode":"one","selector":{"namespaces":["pets"],"labelSelectors":{"app":"product-service"}},"gracePeriod":0}'
+                    value: '{"action":"pod-failure","mode":"one","duration":"${crashLoopPodFailureDuration}","selector":{"namespaces":["pets"],"labelSelectors":{"app":"product-service"}}}'
                   }
                 ]
               }
