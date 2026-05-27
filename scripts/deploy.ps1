@@ -498,18 +498,23 @@ function Install-ChaosMesh {
         throw "Failed to create/update the chaos-testing namespace. $($namespaceOutput.Trim())"
     }
 
-    $existingRelease = helm status chaos-mesh --namespace chaos-testing --output json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
-    if ($LASTEXITCODE -eq 0 -and $existingRelease -and $existingRelease.info.status -eq 'deployed') {
-        $daemonSetJson = kubectl get daemonset chaos-daemon -n chaos-testing -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
-        if ($LASTEXITCODE -eq 0 -and $daemonSetJson) {
-            $desired = [int]$daemonSetJson.status.desiredNumberScheduled
-            $ready = [int]$daemonSetJson.status.numberReady
-            $updated = [int]$daemonSetJson.status.updatedNumberScheduled
-            if ($desired -gt 0 -and $ready -eq $desired -and $updated -eq $desired) {
-                Write-Host "  ✅ Chaos Mesh is already installed and chaos-daemon is ready ($ready/$desired); skipping Helm upgrade." -ForegroundColor Green
-                return
-            }
-            Write-Host "  ⚠️  Existing Chaos Mesh release found, but chaos-daemon is not fully ready ($ready/$desired ready, $updated/$desired updated). Attempting repair upgrade..." -ForegroundColor Yellow
+    $daemonSetJson = kubectl get daemonset chaos-daemon -n chaos-testing -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+    $controllerJson = kubectl get deployment chaos-controller-manager -n chaos-testing -o json 2>$null | ConvertFrom-Json -ErrorAction SilentlyContinue
+    if ($daemonSetJson -and $controllerJson) {
+        $desired = [int]$daemonSetJson.status.desiredNumberScheduled
+        $ready = [int]$daemonSetJson.status.numberReady
+        $updated = [int]$daemonSetJson.status.updatedNumberScheduled
+        $availableControllers = if ($null -ne $controllerJson.status.availableReplicas) { [int]$controllerJson.status.availableReplicas } else { 0 }
+
+        if ($desired -gt 0 -and $availableControllers -gt 0 -and $ready -eq $desired -and $updated -eq $desired) {
+            Write-Host "  ✅ Chaos Mesh is already installed and chaos-daemon is ready ($ready/$desired); skipping Helm upgrade." -ForegroundColor Green
+            return
+        }
+
+        if ($availableControllers -gt 0 -and $ready -gt 0) {
+            Write-Host "  ⚠️  Chaos Mesh is already usable ($availableControllers controller replica(s), $ready/$desired daemon pods ready, $updated/$desired updated); skipping Helm upgrade to avoid disrupting the running add-on." -ForegroundColor Yellow
+            Write-Host "      To repair a partially rolled daemonset later, inspect: kubectl get pods -n chaos-testing -o wide" -ForegroundColor Gray
+            return
         }
     }
 
